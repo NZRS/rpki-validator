@@ -43,14 +43,14 @@ abstract class ValidationResultsTableData(records: IndexedSeq[ValidatedObjectRes
 
     record => searchString.isEmpty ||
       record.trustAnchorName.toUpperCase.contains(searchString) ||
-      record.uri.toString.toUpperCase.contains(searchString) ||
+      record.subjectChain.toString.toUpperCase.contains(searchString) ||
       record.validationStatus.toString.toUpperCase.contains(searchString) ||
       record.messages.contains(searchString)
   }
 
   override def ordering(sortColumn: Int) = {
     sortColumn match {
-      case 0 => implicitly[Ordering[URI]].on(_.uri)
+      case 0 => implicitly[Ordering[String]].on(_.subjectChain)
       case 1 => implicitly[Ordering[ValidationStatus]].on(_.validationStatus)
       case 2 => implicitly[Ordering[String]].on(_.messages)
       case _ => sys.error("unknown sort column: " + sortColumn)
@@ -58,13 +58,42 @@ abstract class ValidationResultsTableData(records: IndexedSeq[ValidatedObjectRes
   }
 
   override def getValuesForRecord(record: ValidatedObjectResult) = {
-    List(<span rel="twipsy" data-original-title={record.uri.toString}>
-      {record.uri.toString.split("/").last}
-    </span>.toString(), record.validationStatus.toString, record.messages)
+    List(
+      <span rel="twipsy" data-original-title={record.subjectChain}>
+        <b>Certificate chain:</b> {record.subjectChain}
+        <br/>
+        <b>URI:</b>&nbsp;{record.uri.toString}
+      </span>.toString(),
+      record.validationStatus.toString,
+      record.messages
+    )
   }
 
 }
 
-case class ValidatedObjectResult(trustAnchorName: String, uri: URI, validationStatus: ValidationStatus, checks: Set[ValidationCheck]) {
-  lazy val messages = checks.map(ValidationMessage.getMessage(_)).mkString("\n")
+abstract class FetchResultsTableData(records: IndexedSeq[ValidatedObjectResult]) extends ValidationResultsTableData(records){
+  override def getValuesForRecord(record: ValidatedObjectResult) = {
+    List(
+      <span rel="twipsy" data-original-title={record.subjectChain}>
+        <b>Certificate chain:</b> {record.subjectChain}
+        <br/>
+        <b>URI:</b>&nbsp;{record.uri.toString}
+      </span>.toString(),
+      record.messages
+    )
+  }
+
+
+  override def ordering(sortColumn: Int) = {
+    sortColumn match {
+      case 0 => implicitly[Ordering[String]].on(_.subjectChain)
+      case 1 => implicitly[Ordering[String]].on(_.messages)
+      case _ => sys.error("unknown sort column: " + sortColumn)
+    }
+  }
+
+}
+
+case class ValidatedObjectResult(trustAnchorName: String, subjectChain: String, uri: URI, validationStatus: ValidationStatus, checks: Set[ValidationCheck]) {
+  lazy val messages = checks.map(ValidationMessage.getMessage).mkString("<br/>\n")
 }

@@ -29,32 +29,29 @@
  */
 package net.ripe.rpki.validator.api
 
-import org.junit.runner.RunWith
-import org.scalatest.junit.JUnitRunner
-
-import net.ripe.ipresource.{ IpRange, Asn }
-import net.ripe.rpki.validator.models.RtrPrefix
+import net.ripe.ipresource.{Asn, IpRange}
 import net.ripe.rpki.validator.bgp.preview.BgpAnnouncement
-import scala._
-import scala.Some
-import org.scalatest.BeforeAndAfter
-import org.scalatra.test.scalatest.ScalatraFunSuite
-import org.scalatra.ScalatraFilter
+import net.ripe.rpki.validator.models.RtrPrefix
 import net.ripe.rpki.validator.support.ValidatorTestCase
+import org.junit.runner.RunWith
+import org.scalatest.BeforeAndAfter
+import org.scalatest.junit.JUnitRunner
+import org.scalatra.ScalatraFilter
+import org.scalatra.test.scalatest.ScalatraFunSuite
 
 @RunWith(classOf[JUnitRunner])
 class BgpPrefixOriginValidationControllerTest extends ValidatorTestCase with ScalatraFunSuite with BeforeAndAfter {
 
   import scala.language.implicitConversions
-  implicit def LongToAsn(asn: Long) = new Asn(asn)
-  implicit def StringToAsn(asn: String) = Asn.parse(asn)
-  implicit def StringToIpRange(prefix: String) = IpRange.parse(prefix)
-  implicit def TupleToBgpAnnouncement(x: (Int, String)) = BgpAnnouncement(x._1, x._2)
-  implicit def TupleToRtrPrefix(x: (Int, String)) = RtrPrefix(x._1, x._2)
-  implicit def TupleToRtrPrefix(x: (Int, String, Int)) = RtrPrefix(x._1, x._2, Some(x._3))
+  implicit def LongToAsn(asn: Long): Asn = new Asn(asn)
+  implicit def StringToAsn(asn: String): Asn = Asn.parse(asn)
+  implicit def StringToIpRange(prefix: String): IpRange = IpRange.parse(prefix)
+  implicit def TupleToBgpAnnouncement(x: (Int, String)): BgpAnnouncement = BgpAnnouncement(x._1, x._2)
+  implicit def TupleToRtrPrefix(x: (Int, String)): RtrPrefix = RtrPrefix(x._1, x._2)
+  implicit def TupleToRtrPrefix(x: (Int, String, Int)): RtrPrefix = RtrPrefix(x._1, x._2, Some(x._3))
 
   private val controller = new ScalatraFilter with BgpPrefixOriginValidationController {
-    protected def getVrpObjects: Set[RtrPrefix] = testVrpObjects
+    protected def getVrpObjects = testVrpObjects.toSeq
   }
   addFilter(controller, "/*")
 
@@ -93,7 +90,8 @@ class BgpPrefixOriginValidationControllerTest extends ValidatorTestCase with Sca
     get(s"$basePath/AS65536.0/10.0.0.0/8") {
       status should be(400)
       header("Set-Cookie") should be(null)
-      header("Content-Type") should be("text/json;charset=UTF-8")
+      header("Content-Type").toLowerCase() should startWith("text/json")
+      header("Content-Type").toLowerCase() should endWith("charset=utf-8")
       body should be("""{
                        |  "message":"'AS65536.0' is not a valid ASN"
                        |}""".stripMargin)
@@ -104,7 +102,8 @@ class BgpPrefixOriginValidationControllerTest extends ValidatorTestCase with Sca
     get(s"$basePath/AS65535.0/10.0.0.0/33") {
       status should be(400)
       header("Set-Cookie") should be(null)
-      header("Content-Type") should be("text/json;charset=UTF-8")
+      header("Content-Type").toLowerCase() should startWith("text/json")
+      header("Content-Type").toLowerCase() should endWith("charset=utf-8")
       body should be("""{
                        |  "message":"'10.0.0.0/33' is not a valid IPv4 or IPv6 prefix"
                        |}""".stripMargin)
@@ -112,7 +111,8 @@ class BgpPrefixOriginValidationControllerTest extends ValidatorTestCase with Sca
     get(s"$basePath/AS65535.0/::/129") {
       status should be(400)
       header("Set-Cookie") should be(null)
-      header("Content-Type") should be("text/json;charset=UTF-8")
+      header("Content-Type").toLowerCase() should startWith("text/json")
+      header("Content-Type").toLowerCase() should endWith("charset=utf-8")
       body should be("""{
                        |  "message":"'::/129' is not a valid IPv4 or IPv6 prefix"
                        |}""".stripMargin)
@@ -126,7 +126,8 @@ class BgpPrefixOriginValidationControllerTest extends ValidatorTestCase with Sca
     get(s"$basePath/AS65001/10.0.0.0/8") {
       status should be(200)
       header("Set-Cookie") should be(null)
-      header("Content-Type") should be("text/json;charset=UTF-8")
+      header("Content-Type").toLowerCase() should startWith("text/json")
+      header("Content-Type").toLowerCase() should endWith("charset=utf-8")
       body should be("""{
                        |  "validated_route":{
                        |    "route":{
@@ -154,7 +155,8 @@ class BgpPrefixOriginValidationControllerTest extends ValidatorTestCase with Sca
     get(s"$basePath/AS65001/10.0.0.0/20") {
       status should be(200)
       header("Set-Cookie") should be(null)
-      header("Content-Type") should be("text/json;charset=UTF-8")
+      header("Content-Type").toLowerCase() should startWith("text/json")
+      header("Content-Type").toLowerCase() should endWith("charset=utf-8")
       body should be("""{
                        |  "validated_route":{
                        |    "route":{
@@ -198,7 +200,8 @@ class BgpPrefixOriginValidationControllerTest extends ValidatorTestCase with Sca
     get(s"$basePath/AS65001/10.0.0.0/8") {
       status should be(200)
       header("Set-Cookie") should be(null)
-      header("Content-Type") should be("text/json;charset=UTF-8")
+      header("Content-Type").toLowerCase() should startWith("text/json")
+      header("Content-Type").toLowerCase() should endWith("charset=utf-8")
       body should be("""{
                        |  "validated_route":{
                        |    "route":{
@@ -231,7 +234,8 @@ class BgpPrefixOriginValidationControllerTest extends ValidatorTestCase with Sca
     get(s"$basePath/AS65001/10.0.0.0/24") {
       status should be(200)
       header("Set-Cookie") should be(null)
-      header("Content-Type") should be("text/json;charset=UTF-8")
+      header("Content-Type").toLowerCase() should startWith("text/json")
+      header("Content-Type").toLowerCase() should endWith("charset=utf-8")
       body should be("""{
                        |  "validated_route":{
                        |    "route":{

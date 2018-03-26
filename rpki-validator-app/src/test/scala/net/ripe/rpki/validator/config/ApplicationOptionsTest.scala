@@ -32,8 +32,10 @@ package net.ripe.rpki.validator.config
 import java.io.File
 import net.ripe.rpki.validator.support.ValidatorTestCase
 
+//noinspection NameBooleanParameters
 @org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
 class ApplicationOptionsTest extends ValidatorTestCase {
+
   import scala.concurrent.duration._
 
   test("Should use 8080 as default http port") {
@@ -72,12 +74,16 @@ class ApplicationOptionsTest extends ValidatorTestCase {
     ApplicationOptions.talDirLocation should equal(new File("conf/tal"))
   }
 
+  test("Should use conf/ssl as default trusted ssl certificates dir") {
+    ApplicationOptions.trustedSslCertsLocation should equal(new File("conf/ssl"))
+  }
+
   test("Should use tmp as default work directory") {
     ApplicationOptions.workDirLocation should equal(new File("tmp"))
   }
 
-  test("Should use log/access.log as default access log") {
-    ApplicationOptions.accessLogFileName should equal("log/access.log")
+  test("Should configure access log file name for rotation") {
+    ApplicationOptions.accessLogFileName.contains("yyyy_MM_dd") should be(true)
   }
 
   test("Should use log/validator.log as default location for application log") {
@@ -88,7 +94,16 @@ class ApplicationOptionsTest extends ValidatorTestCase {
     ApplicationOptions.rtrLogFileName should equal("log/rtr.log")
   }
 
-  test("Should use 3 hours as the default interval for validation") {
-    ApplicationOptions.validationInterval should equal(3.hours)
+  test("Should use 11 minutes as the default interval for validation") {
+    ApplicationOptions.validationInterval should equal(11.minutes)
   }
+
+  test("Should use data/rsync as the default directory for rsync-based repositories") {
+    ApplicationOptions.rsyncDirLocation should equal("data/rsync")
+  }
+
+  test("Should set interval between old object removals") {
+    ApplicationOptions.removeOldObjectTimeoutInHours should equal(1.days)
+  }
+
 }

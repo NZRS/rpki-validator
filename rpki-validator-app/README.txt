@@ -1,6 +1,27 @@
 RIPE NCC RPKI Validator
 =======================
 
+Validator-3
+-----------
+We are working hard to make a new version of this validator. It is available for beta
+testing here:
+https://github.com/RIPE-NCC/rpki-validator-3
+
+We expect to make our first official release by the end of February. Effort on this
+project is expected to be limited to bug fixes only, once the new version is found
+to be stable
+
+Description
+-----------
+
+This application allows operators to download and validate the global Resource 
+Public Key Infrastructure (RPKI) data set for use in their BGP decision making 
+process and router configuration. To learn more about RPKI and BGP Origin Validation, 
+please visit:
+
+  https://www.ripe.net/manage-ips-and-asns/resource-management/certification
+
+
 Source Code
 -----------
 
@@ -12,7 +33,7 @@ The RIPE NCC RPKI Validator is an open source project on Github. Please contribu
 Support
 -------
 
-Please contact <certification@ripe.net> with any questions relating to the
+Please contact <sw-bugs@ripe.net> with any questions relating to the
 RIPE NCC RPKI Validator or the RIPE NCC Resource Certification (RPKI) service.
 
 
@@ -25,12 +46,12 @@ Requirements
   uses the following rsync(1) options: --update, --times, --copy-links, --recursive, and
   --delete.
   
-= Oracle JDK 7
+= Oracle JDK 8
 
-  This software was developed and tested using Oracle JDK 7. This Java version should be
+  This software was developed and tested using Oracle JDK 8. This Java version should be
   available without restrictions for all major platforms, though it may not be included 
   in your distribution by default.
-
+  
   You can check which version of Java you have by running:
 
   $ java -version
@@ -46,14 +67,22 @@ Requirements
       
   $JAVA_HOME/bin/java
 
-= At least 1GB of free memory
+= At least 1.5 GB of free memory
 
-  For performance this tool keeps a lot of data in memory. This also helps multi-threading
-  allowing the tool to work faster by doing tasks in parallel.
+  For performance reasons this tool keeps a lot of data in memory and runs many tasks in
+  parallel.  The actual amount of memory used by the validator depends on the number of
+  enabled trust anchors, number of CPU cores, and on configured validation interval.  In
+  general, more CPU cores require more memory for validator, and vice versa.  
   
+  If the validator keeps crashing with "Out of memory" error, try to increase the amount
+  of memory allocated to it ("jvm.memory.maximum" parameter in the config file). If the
+  validator gets killed by the OOM killer, try to lower the amount of memory allocated to
+  it, or decrease the number of trust anchors (see below), or increase the validation
+  interval ("validation.interval" option in the config file).
+
   
-Usage
------
+Manual Installation
+-------------------
 
 = Decompress the downloaded package
 = Run the RPKI Validator script from the root folder to start, run (in foreground), stop
@@ -72,7 +101,12 @@ Usage
   
   http://yourhost:http-port/    (e.g. http://localhost:8080/)
 
-                           
+Using Puppet
+------------
+
+ARIN created a puppet module for this application that may be useful to you.
+It can be found here: https://github.com/arinlabs/puppet-rpki_validator
+
 Configuration file
 ------------------
 
@@ -119,33 +153,18 @@ This validator will automatically pick up any file matching this pattern:
 The Trust Anchor Locator (TAL) files for four Regional Internet Registries are included
 with this distribution: AFRINIC, APNIC, LACNIC and RIPE NCC. 
 
-To access ARIN's TAL, you will have to agree to ARIN's Relying Party Agreement. After 
-that, the TAL will be emailed to the recipient. Please visit this ARIN web page for
-more information: http://www.arin.net/public/rpki/tal/index.xhtml
+To access ARIN's TAL, you will have to agree to ARIN's Relying Party Agreement. Please 
+visit this ARIN web page for more information: 
 
-After obtaining ARIN's TAL, please copy it to the following location to use it:
+  https://www.arin.net/resources/rpki/tal.html
+
+Please make sure you download the TAL formatted for this RPKI Validator:
+
+  https://www.arin.net/resources/rpki/arin-ripevalidator.tal
+
+After downloading ARIN's TAL, please copy it to the following location to use it:
  
   <root-folder>/conf/tal/
-
-If you compare the format of the included files to the Trust Anchor format defined here:
-
-  http://tools.ietf.org/html/rfc6490
-
-you will notice that the format used here is slightly different. We are using key-value 
-pairs to allow specifying some additional information. Make sure that you enter a value 
-for ca.name. The certificate.location and public.key.info correspond to the location and 
-subjectPublicKeyInfo fields in the standard. The prefecth.uris field is optional. You may 
-specify a comma separated list of rsync URIs for directories here, that will be 
-'pre-fetched'. This helps performance for repositories that have a flat structure 
-(children not published under parents).
-
-Example:  
-
-  ca.name = ARIN RPKI Root
-  certificate.location = rsync://rpki.arin.net/repository/arin-rpki-ta.cer
-  public.key.info = MIIBI..... etc 1 LINE
-  prefetch.uris = rsync://rpki.arin.net/repository/
-
  
 API
 ---
@@ -178,6 +197,64 @@ e.g.
 Full documentation can be found here:
 
   https://www.ripe.net/developers/rpki-validator-api
+  
+RPSL route object output (beta)
+-------------------------------
+
+With version 2.18 we have added support for exporting the full validated ROA set
+in RPSL route object format: http://yourhost:http-port/export.rpsl
+
+This feature is intended to make it easier to integrate using ROA data in an existing
+RPSL based tool chain. When using this feature please keep the following in mind:
+
+ 1) Mandatory attributes missing from ROAs
+ 
+    ROAs do not have data for all mandatory attributes in (RIPE) route objects.
+    Generated 'pseudo' route objects currently look like this:
+    
+      route: 10.0.0.0/24
+      origin: AS65001
+      descr: exported from ripe ncc validator
+      mnt-by: NA
+      created: 2015-04-28T09:57:21Z
+      last-modified: 2015-04-28T09:57:21Z
+      source: ROA-TRUST-ANCHOR-NAME
+    
+    The 'route:' and 'origin:' values are taken from the ROA, and the 'source:' reflects
+    the Trust Anchor where the ROA was found.
+    
+    The 'mnt-by:' value is meant to indicate 'not applicable'. And the values for 'created:'
+    and 'last-modified:' use the time of the export.
+
+ 2) ROAs can have a 'maximum length' attribute
+ 
+    The maximum length parameter in ROAs can be used as a shorthand in case a prefix has
+    de-aggregated announcements from a single ASN. Rather than having to create ROAs for
+    each prefix the ROA can specify a maximum length. For example:
+    
+      prefix: 10.0.0.0/22
+      max length: 24
+      ASN: 65001
+      
+      Implies that 10.0.0.0/22 can be announced from AS65001, but also 10.0.0.0/23 and
+      10.0.2.0/23, as well as 10.0.0.0/24, 10.0.1.0/24, 10.0.2.0/24 and 10.0.3.0/24.
+      
+    When converting ROAs to route objects we currently generate objects for each more
+    specific announcement. However, since this could result in an enormous amount of
+    more specifics, we have to put limits on this. Especially in IPv6 space this could
+    result in millions of objects. Therefore we currently only create objects for the
+    prefix itself and more specifics up to 8 bits.
+
+ 3) Difference in authorisation model
+ 
+    In contrast to ROUTE objects ROAs are only authorised by the holder of the prefix,
+    not the holder of the ASN. The reasoning behind this is that it's the holder of the
+    prefix who gets to authorise an ASN to announce the space, but the authorisation by
+    the ASN is implicit by them actually announcing this space, or not.
+    
+    If this distinction is important to your decision process then you may not want to
+    use this feature.
+
 
 Deep Links
 ----------
@@ -216,14 +293,23 @@ regular expressions, check for the label in the span tag with the id "healthchec
    <span id="healthcheck-result">.*ALERT.*</span>
 
 
+RRDP Support
+------------
+
+This version of the validator supports the RPKI Repository Delta Protocol (RRDP), but by
+default validator will prefer rsync protocol.  You could change that by turning the
+"prefer.rrdp" option in the configuration file to "true".  Note that currently RRDP is in
+the draft state, and only the RIPE NCC repository publishes data using RRDP.  RRDP is
+described in https://tools.ietf.org/html/draft-ietf-sidr-delta-protocol.
+
 Known Issues
 ------------
 
 = The validator does not check for revocations or expiration times in between validation 
   runs
 
-= The validator does not support incremental updates as defined here, yet:
-  http://tools.ietf.org/html/rfc6810#section-6.2
+= In its RTR implementation, the validator does not support incremental updates as defined
+  here, yet: http://tools.ietf.org/html/rfc6810#section-6.2
   
   When the validator has any updates, it will respond with a cache-reset, as described 
   here: http://tools.ietf.org/html/rfc6810#section-6.3
@@ -231,6 +317,52 @@ Known Issues
 
 Version History
 ---------------
+
+2.24 - 9 January 2018
+= Fixed an issue where duplicate Validated ROA Prefixes were sent to a router using RPKI-RTR
+= Updated the set of Trust Anchors to reflect that APNIC now uses a single Trust Anchor instead of five
+
+2.23 - 28 September 2016
+= Performance and stability improvements, bugfixes
+= Add Trust Anchor name as additional column in export files
+= Fallback to plain HTTP if HTTPS connection fails
+= Improve error reporting
+= Parse and validate Ghostbusters Records
+= Support multiple TA certificate URLs in TAL
+= Support HTTP URLs in TAL
+
+2.22 - 25 May 2016
+= Multiple improvements in RRDP support
+= Multiple improvements in database and memory handling
+= Replaced log4j by logback; log configuration is now in logback.xml.
+= Added support multiple TALs for the same TA. This changed monitoring URLs for TALs.
+  If you were using TA monitoring feature, you have to update URLs for monitored trust
+  anchors.
+
+2.21 - 2 November 2015
+= Fixed a bug where a broken CRL made the validation process crash for the given TA
+= Added support for the RPKI Retrieval Delta Protocol, which uses HTTP instead of rsync 
+  as the transport if the RPKI server supports it. There is a boolean option "prefer.rrdp"
+  in the configuration file to enable it. 
+= The startup script now warns if the Java version running on the host is too old
+= Added log rotation for all log files
+= A brand new RIPE NCC logo
+
+2.20 - 5 June 2015
+= Improvements to the caching system; previous versions could use a lot of disk space
+= Multithreading improvements; application is up to 50% faster
+
+2.19 - 12 May 2015
+= General improvements
+
+2.18 - 30 April 2015
+= Updated validation algorithm in preparation of alternative RPKI data retrieval protocol
+= Added initial support for new RPKI data retrieval protocol. Documented here:
+  https://datatracker.ietf.org/doc/draft-ietf-sidr-delta-protocol/
+= Added beta support for exporting ROAs in RPSL route object format. Feedback welcome!
+= Improved some error handling and reporting
+    - rejecting expired TA certificate
+    - report on retrieval errors separate from validation errors
 
 2.17 - 3 July 2014
 = Added a configuration file option to manually set the update interval of the 

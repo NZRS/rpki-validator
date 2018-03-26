@@ -30,16 +30,24 @@
 package net.ripe.rpki.validator
 package config
 
+import net.ripe.rpki.validator.models._
 import net.ripe.rpki.validator.util.TrustAnchorLocator
-import models._
+
 import scalaz.Validation
-import java.net.URI
 
-case class MemoryImage(filters: Filters, whitelist: Whitelist, trustAnchors: TrustAnchors, validatedObjects: ValidatedObjects, version: Int = 0) {
+case class MemoryImage(filters: Filters,
+                       whitelist: Whitelist,
+                       trustAnchors: TrustAnchors,
+                       validatedObjects: ValidatedObjects,
+                       version: Int = 0) {
 
-  def startProcessingTrustAnchor(locator: TrustAnchorLocator, description: String) = copy(trustAnchors = trustAnchors.startProcessing(locator, description))
+  private lazy val distinctRtrPrefixes =
+    (Set.empty[RtrPrefix] ++ whitelist.entries ++ filters.filter(validatedObjects.getValidatedRtrPrefixes)).toSeq
 
-  def finishedProcessingTrustAnchor(locator: TrustAnchorLocator, result: Validation[String, Map[URI, ValidatedObject]]) =
+  def startProcessingTrustAnchor(locator: TrustAnchorLocator, description: String) =
+    copy(trustAnchors = trustAnchors.startProcessing(locator, description))
+
+  def finishedProcessingTrustAnchor(locator: TrustAnchorLocator, result: Validation[String, Seq[ValidatedObject]]) =
     copy(trustAnchors = trustAnchors.finishedProcessing(locator, result))
 
   def updateValidatedObjects(locator: TrustAnchorLocator, newValidatedObjects: Seq[ValidatedObject]) = {
@@ -55,8 +63,7 @@ case class MemoryImage(filters: Filters, whitelist: Whitelist, trustAnchors: Tru
 
   def removeWhitelistEntry(entry: RtrPrefix) = copy(version = version + 1, whitelist = whitelist.removeEntry(entry))
 
-  def getDistinctRtrPrefixes: Set[RtrPrefix] =
-    Set.empty[RtrPrefix] ++ whitelist.entries ++ filters.filter(validatedObjects.getValidatedRtrPrefixes)
+  def getDistinctRtrPrefixes: Seq[RtrPrefix] = distinctRtrPrefixes
 
   def addFilter(filter: IgnoreFilter) = copy(version = version + 1, filters = filters.addFilter(filter))
 
@@ -67,6 +74,8 @@ case class MemoryImage(filters: Filters, whitelist: Whitelist, trustAnchors: Tru
       case true => validatedObjects.update(locator, Seq.empty[ValidatedObject])
       case false => validatedObjects.removeTrustAnchor(locator)
     }
-    copy(version = version + 1, trustAnchors = trustAnchors.updateTrustAnchorState(locator, enabled), validatedObjects = newValidatedObjects)
+    copy(version = version + 1,
+      trustAnchors = trustAnchors.updateTrustAnchorState(locator, enabled),
+      validatedObjects = newValidatedObjects)
   }
 }

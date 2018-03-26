@@ -30,15 +30,14 @@
 package net.ripe.rpki.validator
 package controllers
 
-import scalaz._, Scalaz._
-import models._
-import lib.Validation._
+import net.ripe.rpki.commons.validation.ValidationStatus
+import net.ripe.rpki.validator.lib.Validation._
+import net.ripe.rpki.validator.models.{TrustAnchor, _}
 import net.ripe.rpki.validator.util.TrustAnchorLocator
 import net.ripe.rpki.validator.views._
-import net.ripe.rpki.commons.validation.ValidationStatus
-import scalaz.Success
-import net.ripe.rpki.validator.models.TrustAnchor
-import scalaz.Failure
+
+import scalaz.Scalaz._
+import scalaz.{Failure, Success, _}
 
 trait TrustAnchorsController extends ApplicationController {
   protected def trustAnchors: TrustAnchors
@@ -46,41 +45,61 @@ trait TrustAnchorsController extends ApplicationController {
   protected def validatedObjects: ValidatedObjects
   protected def startTrustAnchorValidation(trustAnchors: Seq[String])
 
+  get(s"${Tabs.TrustAnchorsTab.url}/refresh") {
+    new views.TrustAnchorsView(trustAnchors, validatedObjects.validationStatusCountByTal, messages = feedbackMessages)
+  }
+
   get(s"${Tabs.TrustAnchorsTab.url}") {
     new views.TrustAnchorsView(trustAnchors, validatedObjects.validationStatusCountByTal, messages = feedbackMessages)
   }
 
   get(s"${Tabs.TrustAnchorMonitorTab.url}/:identifierHash") {
     validateParameter("identifierHash", required(trustAnchorByIdentifierHash)) match {
-      case Success(trustAnchor) => {
+      case Success(trustAnchor) =>
         new views.TrustAnchorMonitorView(
           ta = trustAnchor,
           trustAnchorValidations = validatedObjects.all.getOrElse(trustAnchor.locator, TrustAnchorValidations()),
           messages = feedbackMessages)
-      }
       case Failure(feedbackMessage) =>
         redirectWithFeedbackMessages(s"${Tabs.TrustAnchorsTab.url}", feedbackMessage)
     }
   }
 
   get(s"${Tabs.TrustAnchorMonitorTab.url}/validation-detail/:identifierHash") {
-    val validatedObjectResultsForTa: IndexedSeq[ValidatedObjectResult] = validateParameter("identifierHash", required(trustAnchorByIdentifierHash)) match {
-      case Success(trustAnchor) =>  {
-        val validatedObjectsForTa = validatedObjects.all.getOrElse(trustAnchor.locator, TrustAnchorValidations(Seq.empty)).validatedObjects
-        val records = for {
-          validatedObject: ValidatedObject <- validatedObjectsForTa if validatedObject.validationStatus != ValidationStatus.PASSED
-        } yield {
-          ValidatedObjectResult(trustAnchor.name, validatedObject.uri, validatedObject.validationStatus, validatedObject.checks.filterNot(_.getStatus == ValidationStatus.PASSED))
-        }
-        records.seq.toIndexedSeq
-      }
-      case Failure(feedbackMessage) => IndexedSeq.empty
+    val validatedObjectResultsForTa = getValidatedObjectResultsForTa { status =>
+      status != ValidationStatus.PASSED && status != ValidationStatus.FETCH_ERROR
     }
 
     new ValidationResultsTableData(validatedObjectResultsForTa) {
       override def getParam(name: String) = params(name)
     }
   }
+
+  get(s"${Tabs.TrustAnchorMonitorTab.url}/fetch-detail/:identifierHash") {
+    val validatedObjectResultsForTa = getValidatedObjectResultsForTa(_ == ValidationStatus.FETCH_ERROR)
+    new FetchResultsTableData(validatedObjectResultsForTa) {
+      override def getParam(name: String) = params(name)
+    }
+  }
+
+  private def getValidatedObjectResultsForTa(statusFilter: ValidationStatus => Boolean) =
+    (validateParameter("identifierHash", required(trustAnchorByIdentifierHash)) match {
+      case Success(trustAnchor) =>
+        validatedObjects.all.get(trustAnchor.locator).map { ta =>
+          ta.validatedObjects.withFilter { validatedObject =>
+            statusFilter(validatedObject.validationStatus)
+          }.map { validatedObject =>
+            ValidatedObjectResult(trustAnchor.name,
+              validatedObject.subjectChain,
+              validatedObject.uri,
+              validatedObject.validationStatus,
+              validatedObject.checks.filter(check => statusFilter(check.getStatus)))
+          }
+        }.getOrElse(Seq.empty)
+
+      case Failure(feedbackMessage) => Seq.empty
+    }).toIndexedSeq
+
 
   post(s"${Tabs.TrustAnchorsTab.url}/update") {
     validateParameter("name", required(trustAnchorByName)) match {

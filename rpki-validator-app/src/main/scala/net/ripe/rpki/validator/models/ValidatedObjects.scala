@@ -30,10 +30,12 @@
 package net.ripe.rpki.validator
 package models
 
+import java.util
+
 import lib.Java
+import net.ripe.rpki.validator.models.validation._
 import scala.collection.JavaConverters._
 import java.net.URI
-import grizzled.slf4j.Logger
 import net.ripe.rpki.validator.util._
 import net.ripe.rpki.commons.crypto.CertificateRepositoryObject
 import net.ripe.rpki.commons.crypto.cms.roa.RoaCms
@@ -42,26 +44,50 @@ import org.joda.time.DateTime
 
 sealed trait ValidatedObject {
   val uri: URI
+  val subjectChain: String
+  val hash: Option[Array[Byte]]
   val checks: Set[ValidationCheck]
   val isValid: Boolean
 
   def validationStatus: ValidationStatus = {
     val statuses = checks.map(_.getStatus)
-    if (statuses.contains(ValidationStatus.ERROR)) ValidationStatus.ERROR
+    if (statuses.contains(ValidationStatus.FETCH_ERROR)) ValidationStatus.FETCH_ERROR
+    else if (statuses.contains(ValidationStatus.ERROR)) ValidationStatus.ERROR
     else if (statuses.contains(ValidationStatus.WARNING)) ValidationStatus.WARNING
     else ValidationStatus.PASSED
   }
 
-  def hasCheckKey(key: String): Boolean = {
-    checks.map(_.getKey).contains(key)
-  }
-
+  def hasCheckKey(key: String): Boolean = checks.exists(_.getKey == key)
 }
-case class InvalidObject(uri: URI, checks: Set[ValidationCheck]) extends ValidatedObject {
+
+case class InvalidObject(subjectChain: String, uri: URI, hash: Option[Array[Byte]], checks: Set[ValidationCheck]) extends ValidatedObject {
   override val isValid = false
 }
-case class ValidObject(uri: URI, checks: Set[ValidationCheck], repositoryObject: CertificateRepositoryObject) extends ValidatedObject {
+
+case class ValidObject(subjectChain: String, uri: URI, hash: Option[Array[Byte]], checks: Set[ValidationCheck], repositoryObject: CertificateRepositoryObject) extends ValidatedObject {
   override val isValid = true
+}
+
+object ValidatedObject {
+  val separator = " / "
+
+  def flattenSubjectChain(subjectChain: util.List[String]): String = subjectChain.asScala.reduce(_ + separator + _)
+
+  def objectName(obj: Option[(String, RepositoryObject.ROType)]): String = obj match {
+    case Some((name: String, r: RoaObject)) => name
+    case Some((_, m: ManifestObject)) => "manifest"
+    case Some((_, c: CrlObject)) => "crl"
+    case Some((_, c: CertificateObject)) => "certificate"
+    case None => ""
+    case _ => "Unknown object"
+  }
+
+  def invalid(obj: Option[(String, RepositoryObject.ROType)], subjectChain: util.List[String], uri: URI, hash: Option[Array[Byte]], checks: Set[ValidationCheck]) =
+    InvalidObject(flattenSubjectChain(subjectChain) + separator + objectName(obj), uri, hash, checks)
+
+  def valid(obj: Option[(String, RepositoryObject.ROType)], subjectChain: util.List[String], uri: URI, hash: Option[Array[Byte]], checks: Set[ValidationCheck],
+            repositoryObject: CertificateRepositoryObject) =
+    ValidObject(flattenSubjectChain(subjectChain) + separator + objectName(obj), uri, hash, checks, repositoryObject)
 }
 
 case class ObjectCountDrop(previousNumber: Int, firstObserved: DateTime = new DateTime())
@@ -73,7 +99,7 @@ object TrustAnchorValidations {
 
   def crossedDropThreshold(previousNumber: Int, newValidatedObjects: Seq[ValidatedObject]): Boolean = {
     previousNumber * DropThresholdMinObjectCountFactor >= newValidatedObjects.size &&
-    ValidatedObjects.statusCounts(newValidatedObjects).getOrElse(ValidationStatus.ERROR, 0) >= DropThresholdMaxErrors
+      ValidatedObjects.statusCounts(newValidatedObjects).getOrElse(ValidationStatus.ERROR, 0) >= DropThresholdMaxErrors
   }
 }
 
@@ -87,17 +113,15 @@ case class TrustAnchorValidations(validatedObjects: Seq[ValidatedObject] = Seq.e
       val previousNumber = validatedObjects.size
       if (crossedDropThreshold(previousNumber, newValidatedObjects)) {
         Some(ObjectCountDrop(previousNumber))
-      } else {
+      } else
         None
-      }
     }
 
     def checkForObjectDropRecovery(newValidatedObjects: Seq[ValidatedObject], existingDrop: ObjectCountDrop): Option[ObjectCountDrop] = {
       if (crossedDropThreshold(existingDrop.previousNumber, newValidatedObjects)) {
         Some(existingDrop)
-      } else {
+      } else
         None
-      }
     }
 
     if (validatedObjects.isEmpty) {
@@ -108,7 +132,6 @@ case class TrustAnchorValidations(validatedObjects: Seq[ValidatedObject] = Seq.e
         case Some(drop) => TrustAnchorValidations(newValidatedObjects, checkForObjectDropRecovery(newValidatedObjects, drop))
       }
     }
-
   }
 }
 
@@ -121,10 +144,11 @@ class ValidatedObjects(val all: Map[TrustAnchorLocator, TrustAnchorValidations])
   def getValidatedRtrPrefixes = {
     for {
       (locator, taValidations) <- all
-      ValidObject(_, _, roa: RoaCms) <- taValidations.validatedObjects
+      oLocator = Option(locator)
+      ValidObject(_, _, _, _, roa: RoaCms) <- taValidations.validatedObjects
       roaPrefix <- roa.getPrefixes.asScala
     } yield {
-      RtrPrefix(roa.getAsn, roaPrefix.getPrefix, Java.toOption(roaPrefix.getMaximumLength), Option(locator))
+      RtrPrefix(roa.getAsn, roaPrefix.getPrefix, Java.toOption(roaPrefix.getMaximumLength), oLocator)
     }
   }
 

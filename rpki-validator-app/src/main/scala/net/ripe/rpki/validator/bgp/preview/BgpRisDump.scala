@@ -34,22 +34,26 @@ import net.ripe.ipresource.IpRange
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
+
 import grizzled.slf4j.Logging
+import net.ripe.rpki.validator.lib.DateAndTime
 import org.joda.time.DateTime
 
+import scala.util.control.NonFatal
+
 case class BgpRisEntry(origin: Asn, prefix: IpRange, visibility: Int)
-case class BgpRisDump(url: String, lastModified: Option[DateTime] = None, entries: Seq[BgpRisEntry] = Nil) {
-  def announcedRoutes: Seq[BgpAnnouncement] = {
-    (for {
-      entry <- entries
-      if entry.visibility >= BgpAnnouncementValidator.VISIBILITY_THRESHOLD
-    } yield {
-      BgpAnnouncement(entry.origin, entry.prefix)
-    }).distinct
-  }
-}
+case class BgpRisDump(url: String, lastModified: Option[DateTime] = None, entries: Seq[BgpRisEntry] = Nil)
 
 object BgpRisDump extends Logging {
+  def toAnnouncedRoutes(entries: Seq[BgpRisEntry]): Seq[BgpAnnouncement] = {
+    val (r, t) = DateAndTime.timed {
+      entries.par.
+        filter(e => e.visibility >= BgpAnnouncementValidator.VISIBILITY_THRESHOLD).
+        map(e => BgpAnnouncement(e.origin, e.prefix)).distinct.seq
+    }
+    info(s"toAnnouncedRoutes time ${t/1000.0} seconds")
+    r
+  }
 
   def parse(is: InputStream): Either[Exception, IndexedSeq[BgpRisEntry]] = {
     val identityMap = new ObjectIdentityMap
@@ -74,10 +78,10 @@ object BgpRisDump extends Logging {
     content match {
       case BgpEntryRegex(asn, ipprefix, visibility) =>
         try {
-          Some(new BgpRisEntry(origin = Asn.parse(asn), prefix = IpRange.parse(ipprefix), visibility = Integer.parseInt(visibility)))
+          Some(BgpRisEntry(origin = Asn.parse(asn), prefix = IpRange.parse(ipprefix), visibility = Integer.parseInt(visibility)))
         } catch {
-          case e: Throwable =>
-            error("Skipping unparseble line: " + content)
+          case NonFatal(e) =>
+            error("Skipping unparseable line: " + content)
             debug("Detailed error: ", e)
             None
         }

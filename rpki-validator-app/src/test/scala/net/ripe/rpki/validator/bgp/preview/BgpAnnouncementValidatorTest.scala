@@ -42,12 +42,12 @@ import net.ripe.rpki.validator.support.ValidatorTestCase
 class BgpAnnouncementValidatorTest extends ValidatorTestCase with BeforeAndAfterAll {
 
   import scala.language.implicitConversions
-  implicit def LongToAsn(asn: Long) = new Asn(asn)
-  implicit def StringToAsn(asn: String) = Asn.parse(asn)
-  implicit def StringToIpRange(prefix: String) = IpRange.parse(prefix)
-  implicit def TupleToBgpAnnouncement(x: (Int, String)) = BgpAnnouncement(x._1, x._2)
-  implicit def TupleToRtrPrefix(x: (Int, String)) = RtrPrefix(x._1, x._2)
-  implicit def TupleToRtrPrefix(x: (Int, String, Int)) = RtrPrefix(x._1, x._2, Some(x._3))
+  implicit def IntToAsn(asn: Int): Asn = new Asn(asn)
+  implicit def StringToAsn(asn: String): Asn = Asn.parse(asn)
+  implicit def StringToIpRange(prefix: String): IpRange = IpRange.parse(prefix)
+  implicit def TupleToBgpAnnouncement(x: (Int, String)): BgpAnnouncement = BgpAnnouncement(x._1, x._2)
+  implicit def TupleToRtrPrefix(x: (Int, String)): RtrPrefix = RtrPrefix(x._1, x._2)
+  implicit def TupleToRtrPrefix(x: (Int, String, Int)): RtrPrefix = RtrPrefix(x._1, x._2, Some(x._3))
 
   implicit val actorSystem = akka.actor.ActorSystem()
   private val subject = new BgpAnnouncementValidator
@@ -60,10 +60,10 @@ class BgpAnnouncementValidatorTest extends ValidatorTestCase with BeforeAndAfter
 
     subject.validatedAnnouncements should have size 4
     subject.validatedAnnouncements should be(Seq(
-      BgpValidatedAnnouncement((65001, "10.0.1.0/24"), valids = Seq((65001, "10.0.1.0/24"))),
-      BgpValidatedAnnouncement((65002, "10.0.2.0/24"), invalidsAsn = Seq((65001, "10.0.2.0/24"))),
-      BgpValidatedAnnouncement((65003, "10.0.3.0/24"), invalidsLength = Seq((65003, "10.0.3.0/24", 20))),
-      BgpValidatedAnnouncement((65004, "10.0.4.0/24"))))
+      BgpValidatedAnnouncement.make((65001, "10.0.1.0/24"), valids = Seq((65001, "10.0.1.0/24"))),
+      BgpValidatedAnnouncement.make((65002, "10.0.2.0/24"), invalidsAsn = Seq((65001, "10.0.2.0/24"))),
+      BgpValidatedAnnouncement.make((65003, "10.0.3.0/24"), invalidsLength = Seq((65003, "10.0.3.0/24", 20))),
+      BgpValidatedAnnouncement.make((65004, "10.0.4.0/24"))))
   }
 
   test("validity should be Unknown if there are no RTR prefixes") {
@@ -106,7 +106,7 @@ class BgpAnnouncementValidatorTest extends ValidatorTestCase with BeforeAndAfter
     val announcement = (65001, "10.0.1.0/24"): BgpAnnouncement
     val invalidsAsn = Seq[RtrPrefix]((65002, "10.0.1.0/24"))
 
-    val e = evaluating { BgpValidatedAnnouncement(announcement, invalidsLength = invalidsAsn) } should produce [IllegalArgumentException]
+    val e = the [IllegalArgumentException] thrownBy { BgpValidatedAnnouncement.make(announcement, invalidsLength = invalidsAsn) }
     e.getMessage should equal ("requirement failed: invalidsLength must only contain VRPs that refer to the same ASN")
   }
 
@@ -114,7 +114,7 @@ class BgpAnnouncementValidatorTest extends ValidatorTestCase with BeforeAndAfter
     val announcement = (65001, "10.0.1.0/24"): BgpAnnouncement
     val invalidsLength = Seq[RtrPrefix]((65001, "10.0.0.0/16", 20))
 
-    val e = evaluating { BgpValidatedAnnouncement(announcement, invalidsAsn = invalidsLength) } should produce [IllegalArgumentException]
+    val e = the [IllegalArgumentException] thrownBy { BgpValidatedAnnouncement.make(announcement, invalidsAsn = invalidsLength) }
     e.getMessage should equal ("requirement failed: invalidsAsn must not contain the announced ASN")
   }
 
@@ -126,14 +126,14 @@ class BgpAnnouncementValidatorTest extends ValidatorTestCase with BeforeAndAfter
 
     BgpValidatedAnnouncement(announcement).validity should be(Unknown)
 
-    BgpValidatedAnnouncement(announcement, invalidsLength = invalidsLength).validity should be(InvalidLength)
-    BgpValidatedAnnouncement(announcement, invalidsAsn = invalidsAsn, invalidsLength = invalidsLength).validity should be(InvalidLength)
+    BgpValidatedAnnouncement.make(announcement, invalidsLength = invalidsLength).validity should be(InvalidLength)
+    BgpValidatedAnnouncement.make(announcement, invalidsAsn = invalidsAsn, invalidsLength = invalidsLength).validity should be(InvalidLength)
 
-    BgpValidatedAnnouncement(announcement, invalidsAsn = invalidsAsn).validity should be(InvalidAsn)
+    BgpValidatedAnnouncement.make(announcement, invalidsAsn = invalidsAsn).validity should be(InvalidAsn)
 
-    BgpValidatedAnnouncement(announcement, valids).validity should be(Valid)
-    BgpValidatedAnnouncement(announcement, valids, invalidsAsn).validity should be(Valid)
-    BgpValidatedAnnouncement(announcement, valids, invalidsLength = invalidsLength).validity should be(Valid)
-    BgpValidatedAnnouncement(announcement, valids, invalidsAsn, invalidsLength).validity should be(Valid)
+    BgpValidatedAnnouncement.make(announcement, valids).validity should be(Valid)
+    BgpValidatedAnnouncement.make(announcement, valids, invalidsAsn).validity should be(Valid)
+    BgpValidatedAnnouncement.make(announcement, valids, invalidsLength = invalidsLength).validity should be(Valid)
+    BgpValidatedAnnouncement.make(announcement, valids, invalidsAsn, invalidsLength).validity should be(Valid)
   }
 }

@@ -25,3 +25,4 @@ rpki-validator-app/data
 
 # ARIN TAL, can't go into the repository
 rpki-validator-app/conf/tal/arin.tal
+data

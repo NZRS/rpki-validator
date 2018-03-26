@@ -32,7 +32,7 @@ package net.ripe.rpki.validator.api
 import org.scalatra.ScalatraServlet
 import net.liftweb.json._
 
-abstract class RestApi extends ScalatraServlet with BgpPrefixOriginValidationController {
+abstract class RestApi extends ScalatraServlet with BgpPrefixOriginValidationController with CacheStoreController {
   import net.liftweb.json.JsonDSL._
 
   before() {

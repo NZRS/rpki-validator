@@ -50,11 +50,21 @@ function warn {
 
 function usage {
 cat << EOF
-Usage: $0 start  [-c /path/to/my-configuration.conf]
-   or  $0 run    [-c /path/to/my-configuration.conf]
-   or  $0 stop   [-c /path/to/my-configuration.conf]
-   or  $0 status [-c /path/to/my-configuration.conf]
+Usage: $0 start    [-c /path/to/my-configuration.conf]
+   or  $0 run      [-c /path/to/my-configuration.conf]
+   or  $0 stop     [-c /path/to/my-configuration.conf]
+   or  $0 status   [-c /path/to/my-configuration.conf]
+   or  $0 watchdog -u http://check/url [-c /path/to/my-configuration.conf]
 EOF
+}
+
+
+function check_java_version {
+  JAVA_VERSION=`${JAVA_CMD} -version 2>&1 | grep version | sed 's/.* version //g'`
+  MAJOR_VERSION=`echo ${JAVA_VERSION} | sed 's/"\([[:digit:]]\)\.\([[:digit:]]\).*"/\1\2/g'`
+  if (( ${MAJOR_VERSION} < 17 )) ; then
+    error_exit "RPKI validator requires Java 1.7 or greater, your version of java is ${JAVA_VERSION}";
+  fi
 }
 
 #
@@ -72,6 +82,7 @@ if [ -z $JAVA_CMD ]; then
     error_exit "Cannot find java on path. Make sure java is installed and/or set JAVA_HOME"
 fi
 
+check_java_version
 
 # See how we're called
 FIRST_ARG="$1"
@@ -81,9 +92,20 @@ if [[ -n $MODE ]]; then
    exit
 fi
 
+#Validate that rsync is available in the path and is executable
+if ! [ -x "$(command -v rsync)" ]; then
+  echo 'rsync not found. It is necessary to sync repositories.' >&2
+  exit 1
+fi
+
+
 # Determine config file location
 getopts ":c:" OPT_NAME
 CONFIG_FILE=${OPTARG:-conf/rpki-validator.conf}
+
+getopts ":u:" OPT_NAME
+CHECK_URL=${OPTARG}
+
 
 if [[ ! $CONFIG_FILE =~ .*conf$ ]]; then
         error_exit "Configuration file name must end with .conf"
@@ -138,60 +160,129 @@ parse_jvm_options
 #
 # Determine if the application is already running
 #
-RUNNING="false"
-if [ -e ${PID_FILE} ]; then
-    ps `cat ${PID_FILE}` | grep "\-Dapp.name=${APP_NAME}" >/dev/null 2>&1
-    if [ $? == "0" ]; then
-        RUNNING="true"
-    fi
+RUNNING=is_running
+
+RUN_IN_BACKGROUND="false"
+
+if [ ${FIRST_ARG} == "start" ] || [ ${FIRST_ARG} == "restart" ] || [ ${FIRST_ARG} == "watchdog" ]; then
+    RUN_IN_BACKGROUND="true"
 fi
 
 
+function is_running {
+    if [ -e ${PID_FILE} ]; then
+        if [ x`cat ${PID_FILE}` == x`pgrep -f -- -Dapp.name=${APP_NAME}` ]; then
+            echo "true";
+            exit;
+        fi
+    fi
+    echo "false";
+}
+
+function start_validator {
+    if [ ${RUNNING} == "true" ]; then
+        error_exit "${APP_NAME} is already running"
+    fi
+
+    info "Starting ${APP_NAME}..."
+    info "writing logs under log directory"
+    info "Web user interface is available on port ${HTTP_PORT_VALUE}"
+    info "Routers can connect on port ${RTR_PORT_VALUE}"
+
+    CLASSPATH=:"$LIB_DIR/*"
+    MEM_OPTIONS="-Xms$JVM_XMS -Xmx$JVM_XMX"
+
+    CMDLINE="${JAVA_CMD} ${JVM_OPTIONS} ${MEM_OPTIONS} ${JAVA_OPTS} \
+             -Dapp.name=${APP_NAME} -Dconfig.file=${CONFIG_FILE} \
+             -classpath ${CLASSPATH} net.ripe.rpki.validator.config.Main"
+
+    if [ ${RUN_IN_BACKGROUND} == "true" ]; then
+        ${CMDLINE} &
+    else
+        ${CMDLINE}
+        exit $?
+    fi
+
+    PID=$!
+    echo $PID > $PID_FILE
+    info "Writing PID ${PID} to ${PID_FILE}"
+}
+
+function stop_validator {
+    info "Stopping ${APP_NAME}..."
+    RUNNING=$(is_running)
+    if [ ${RUNNING} == "true" ]; then
+        kill `cat ${PID_FILE}` && rm ${PID_FILE}
+    else
+        info "${APP_NAME} in not running"
+    fi
+}
+
+function check_status {
+    if [ ${RUNNING} == "true" ]; then
+        info "${APP_NAME} is running"
+    else
+        info "${APP_NAME} is not running"
+    fi
+    exit 0
+}
+
+function restart_validator {
+    stop_validator
+    RUNNING=$(is_running)
+    while [ $RUNNING == "true" ]; do
+        sleep 1
+        echo "Waiting for validator to stop..."
+        RUNNING=$(is_running)
+    done
+    start_validator
+}
+
+function check_and_maybe_restart_validator {
+    if [ -z ${CHECK_URL} ]; then
+        echo "Check URL is not set, please set the parameter: -u URL"
+        exit 1
+    fi
+    RUNNING=$(is_running)
+    if [ ${RUNNING} == "true" ]; then
+        HEALTH=$(curl -s $CHECK_URL)
+        HEALTH_HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $CHECK_URL)
+        info "Health check JSON is $HEALTH"
+        info "Health check response code is $HEALTH_HTTP_STATUS"
+        case $HEALTH_HTTP_STATUS in
+            503)
+                restart_validator
+                ;;
+            000)
+                start_validator
+                ;;
+            *)
+                info "Validator is working fine, nothing to be done."
+                ;;
+        esac
+        exit 0
+    else
+        info "${APP_NAME} is not running, will try to start it..."
+        start_validator
+        exit 0
+    fi
+}
+
 case ${FIRST_ARG} in
     start|run)
-        if [ ${RUNNING} == "true" ]; then
-            error_exit "${APP_NAME} is already running"
-        fi
-
-        info "Starting ${APP_NAME}..."
-        info "writing logs under log directory"
-        info "Web user interface is available on port ${HTTP_PORT_VALUE}"
-        info "Routers can connect on port ${RTR_PORT_VALUE}"
-
-        CLASSPATH=:"$LIB_DIR/*"
-        MEM_OPTIONS="-Xms$JVM_XMS -Xmx$JVM_XMX"
-
-        CMDLINE="${JAVA_CMD} ${JVM_OPTIONS} ${MEM_OPTIONS} ${JAVA_OPTS} \
-                 -Dapp.name=${APP_NAME} -Dconfig.file=${CONFIG_FILE} \
-                 -classpath ${CLASSPATH} net.ripe.rpki.validator.config.Main"
-
-        if [ ${FIRST_ARG} == "start" ]; then
-            ${CMDLINE} &
-        elif [ ${FIRST_ARG} == "run" ]; then
-            ${CMDLINE}
-            exit $?
-        fi
-
-        PID=$!
-        echo $PID > $PID_FILE
-        info "Writing PID ${PID} to ${PID_FILE}"
+        start_validator
         ;;
     stop)
-        info "Stopping ${APP_NAME}..."
-        if [ ${RUNNING} == "true" ]; then
-            kill `cat ${PID_FILE}` && rm ${PID_FILE}
-        else
-            info "${APP_NAME} in not running"
-        fi
+        stop_validator
+        ;;
+    restart)
+        restart_validator
         ;;
     status)
-        if [ ${RUNNING} == "true" ]; then
-            info "${APP_NAME} is running"
-            exit 0
-        else
-            info "${APP_NAME} is not running"
-            exit 0
-        fi
+        check_status
+        ;;
+    watchdog)
+        check_and_maybe_restart_validator
         ;;
     *)
         usage
@@ -200,4 +291,3 @@ case ${FIRST_ARG} in
 esac
 
 exit $?
-

@@ -30,103 +30,109 @@
 package net.ripe.rpki.validator
 package config
 
-import org.apache.http.client.methods.HttpGet
-
-import scala.collection.JavaConverters._
-import org.apache.commons.io.FileUtils
-import org.eclipse.jetty.server.Server
-import org.joda.time.DateTime
-import grizzled.slf4j.Logger
-import rtr.Pdu
-import rtr.RTRServer
-import lib._
-import models._
-import bgp.preview._
-import scala.concurrent.stm._
-import scala.concurrent.Future
-import scala.math.Ordering.Implicits._
-import org.apache.http.impl.client.{HttpClientBuilder, SystemDefaultHttpClient}
-import net.ripe.rpki.validator.util.TrustAnchorLocator
-import org.apache.http.params.HttpConnectionParams
-import java.net.InetSocketAddress
+import java.io.{File, PrintStream}
 import java.util.EnumSet
 import javax.servlet.DispatcherType
-import scala.Predef._
-import scalaz.Failure
-import net.ripe.rpki.validator.models.TrustAnchorData
-import net.ripe.rpki.validator.models.Idle
-import net.ripe.rpki.validator.lib.UserPreferences
-import scalaz.Success
-import net.ripe.rpki.validator.models.IgnoreFilter
+
+import grizzled.slf4j.Logging
+import net.ripe.rpki.commons.crypto.CertificateRepositoryObject
 import net.ripe.rpki.validator.api.RestApi
-import com.codahale.metrics.servlets.HealthCheckServlet
-import net.ripe.rpki.validator.config.health.HealthChecks
+import net.ripe.rpki.validator.bgp.preview._
+import net.ripe.rpki.validator.config.health.HealthServlet
+import net.ripe.rpki.validator.fetchers.FetcherConfig
+import net.ripe.rpki.validator.lib.{UserPreferences, _}
+import net.ripe.rpki.validator.models.validation._
+import net.ripe.rpki.validator.models.{Idle, IgnoreFilter, TrustAnchorData, _}
+import net.ripe.rpki.validator.rtr.{Pdu, RTRServer}
+import net.ripe.rpki.validator.store.{CacheStore, DurableCaches}
+import net.ripe.rpki.validator.util.TrustAnchorLocator
+import org.apache.commons.io.FileUtils
+import org.apache.http.client.methods.HttpGet
+import org.eclipse.jetty.server.Server
+import org.joda.time.DateTime
+import org.slf4j.LoggerFactory
+
+import scala.Predef._
+import scala.collection.JavaConverters._
+import scala.concurrent.Future
+import scala.concurrent.stm._
+import scala.math.Ordering.Implicits._
+import scalaz.{Failure, Success}
 
 object Main {
   private val sessionId: Pdu.SessionId = Pdu.randomSessionid
 
   def main(args: Array[String]): Unit = {
+    setupLogging()
+    new Main()
+  }
+
+  private def setupLogging() {
     System.setProperty("VALIDATOR_LOG_FILE", ApplicationOptions.applicationLogFileName)
     System.setProperty("RTR_LOG_FILE", ApplicationOptions.rtrLogFileName)
-    new Main()
+    System.setErr(new PrintStream(new LoggingOutputStream(), true))
+    LoggerFactory.getLogger(this.getClass).info("Starting up the RPKI validator...")
   }
 }
 
-class Main() { main =>
+class Main extends Http with Logging { main =>
   import scala.concurrent.duration._
-
-  val logger = Logger[this.type]
 
   implicit val actorSystem = akka.actor.ActorSystem()
   import actorSystem.dispatcher
 
   val startedAt = System.currentTimeMillis
 
-  val bgpRisDumps = Ref(Seq(
-    BgpRisDump("http://www.ris.ripe.net/dumps/riswhoisdump.IPv4.gz"),
-    BgpRisDump("http://www.ris.ripe.net/dumps/riswhoisdump.IPv6.gz")))
+  logger.info(s"Prefer RRDP=${ApplicationOptions.preferRrdp}")
+  
+  val bgpAnnouncementSets = Ref(Seq(
+    BgpAnnouncementSet("http://www.ris.ripe.net/dumps/riswhoisdump.IPv4.gz"),
+    BgpAnnouncementSet("http://www.ris.ripe.net/dumps/riswhoisdump.IPv6.gz")))
 
   val bgpAnnouncementValidator = new BgpAnnouncementValidator
 
   val dataFile = ApplicationOptions.dataFileLocation
   val data = PersistentDataSerialiser.read(dataFile).getOrElse(PersistentData())
 
-  val trustAnchors = loadTrustAnchors().all.map { ta => ta.copy(enabled = data.trustAnchorData.get(ta.name).map(_.enabled).getOrElse(true)) }
-  val roas = ValidatedObjects(new TrustAnchors(trustAnchors.filter(ta => ta.enabled)))
+  val trustAnchors = loadTrustAnchors().all.map { ta => ta.copy(enabled = data.trustAnchorData.get(ta.name).forall(_.enabled)) }
+  val roas = ValidatedObjects(new TrustAnchors(trustAnchors.filter(_.enabled)))
+
+  override def trustedCertsLocation = ApplicationOptions.trustedSslCertsLocation
 
   val userPreferences = Ref(data.userPreferences)
 
-  val httpClient = new SystemDefaultHttpClient()
-  val httpParams = httpClient.getParams
-  HttpConnectionParams.setConnectionTimeout(httpParams, 2 * 60 * 1000)
-  HttpConnectionParams.setSoTimeout(httpParams, 2 * 60 * 1000)
-
-  val bgpRisDumpDownloader = new BgpRisDumpDownloader(httpClient)
+  val bgpRisDumpDownloader = new BgpRisDumpDownloader(http)
 
   val memoryImage = Ref(
     MemoryImage(data.filters, data.whitelist, new TrustAnchors(trustAnchors), roas))
 
+  var store : CacheStore = _
+
   def updateMemoryImage(f: MemoryImage => MemoryImage)(implicit transaction: MaybeTxn) {
     atomic { implicit transaction =>
       val oldVersion = memoryImage().version
-
       memoryImage.transform(f)
+      val newVersion = memoryImage().version
 
-      if (oldVersion != memoryImage().version) {
-        bgpAnnouncementValidator.startUpdate(main.bgpRisDumps().flatMap(_.announcedRoutes), memoryImage().getDistinctRtrPrefixes.toSeq)
-        rtrServer.notify(memoryImage().version)
+      val bgpAnnouncements = main.bgpAnnouncementSets().flatMap(_.entries)
+      val distinctRtrPrefixes = memoryImage().getDistinctRtrPrefixes
+
+      Txn.afterCommit { _ =>
+        if (oldVersion != newVersion) {
+          bgpAnnouncementValidator.startUpdate(bgpAnnouncements, distinctRtrPrefixes.toSeq)
+          rtrServer.notify(newVersion)
+        }
       }
     }
   }
 
+  wipeRsyncDiskCache()
+
   val rtrServer = runRtrServer()
-
-
 
   runWebServer()
 
-
-  actorSystem.scheduler.schedule(initialDelay = 0.seconds, interval = 10.seconds) { runValidator() }
+  actorSystem.scheduler.schedule(initialDelay = 0.seconds, interval = 10.seconds) { runValidator(false) }
   actorSystem.scheduler.schedule(initialDelay = 0.seconds, interval = 2.hours) { refreshRisDumps() }
 
   private def loadTrustAnchors(): TrustAnchors = {
@@ -135,15 +141,15 @@ class Main() { main =>
   }
 
   private def refreshRisDumps() {
-    Future.traverse(bgpRisDumps.single.get)(bgpRisDumpDownloader.download) foreach { dumps =>
+    Future.traverse(bgpAnnouncementSets.single.get)(bgpRisDumpDownloader.download) foreach { dumps =>
       atomic { implicit transaction =>
-        bgpRisDumps() = dumps
-        bgpAnnouncementValidator.startUpdate(dumps.flatMap(_.announcedRoutes), memoryImage().getDistinctRtrPrefixes.toSeq)
+        bgpAnnouncementSets() = dumps
+        bgpAnnouncementValidator.startUpdate(bgpAnnouncementSets().flatMap(_.entries), memoryImage().getDistinctRtrPrefixes)
       }
     }
   }
 
-  private def runValidator() {
+  private def runValidator(forceNewFetch: Boolean) {
     import lib.DateAndTime._
 
     val now = new DateTime
@@ -153,25 +159,34 @@ class Main() { main =>
       if nextUpdate <= now
     } yield ta.name
 
-    runValidator(needUpdating)
+    runValidator(needUpdating, forceNewFetch)
   }
 
-  private def runValidator(trustAnchorNames: Seq[String]) {
+  private def runValidator(trustAnchorNames: Seq[String], forceNewFetch: Boolean) {
     val maxStaleDays = userPreferences.single.get.maxStaleDays
     val trustAnchors = memoryImage.single.get.trustAnchors.all
 
-    val taLocators = trustAnchorNames.flatMap { name => trustAnchors.find(_.name == name) }.map(_.locator)
+    val taLocators = trustAnchorNames.flatMap { name => trustAnchors.find(_.name == name) }
+
+    store = DurableCaches(ApplicationOptions.workDirLocation)
 
     for (trustAnchorLocator <- taLocators) {
       Future {
-        val process = new TrustAnchorValidationProcess(trustAnchorLocator, maxStaleDays,  ApplicationOptions.workDirLocation, ApplicationOptions.enableLooseValidation) with TrackValidationProcess with ValidationProcessLogger {
+        val repoService = new RepoService(RepoFetcher(ApplicationOptions.workDirLocation, FetcherConfig(ApplicationOptions.rsyncDirLocation)))
+
+        val process = new TrustAnchorValidationProcess(trustAnchorLocator.locator,
+          store,
+          repoService,
+          maxStaleDays,
+          trustAnchorLocator.name,
+          ApplicationOptions.enableLooseValidation
+        ) with TrackValidationProcess with ValidationProcessLogger {
           override val memoryImage = main.memoryImage
         }
         try {
-          process.runProcess() match {
-            case Success(validatedObjectsByUri) =>
-              val validatedObjects = validatedObjectsByUri.values.toSeq
-              updateMemoryImage(_.updateValidatedObjects(trustAnchorLocator, validatedObjects))
+          process.runProcess(forceNewFetch) match {
+            case Success(validatedObjects) =>
+              updateMemoryImage(_.updateValidatedObjects(trustAnchorLocator.locator, validatedObjects))
             case Failure(_) =>
           }
         } finally {
@@ -191,6 +206,7 @@ class Main() { main =>
     server.start()
     logger.info("Welcome to the RIPE NCC RPKI Validator, now available on port " + ApplicationOptions.httpPort + ". Hit CTRL+C to terminate.")
   }
+
 
   private def runRtrServer(): RTRServer = {
     val rtrServer = new RTRServer(
@@ -214,10 +230,9 @@ class Main() { main =>
   }
 
   private def setup(server: Server): Server = {
-    import org.eclipse.jetty.servlet._
-    import org.eclipse.jetty.server.handler.RequestLogHandler
-    import org.eclipse.jetty.server.handler.HandlerCollection
     import org.eclipse.jetty.server.NCSARequestLog
+    import org.eclipse.jetty.server.handler.{HandlerCollection, RequestLogHandler}
+    import org.eclipse.jetty.servlet._
     import org.scalatra._
 
     val webFilter = new WebFilter {
@@ -234,7 +249,7 @@ class Main() { main =>
         }
       }
 
-      override protected def startTrustAnchorValidation(trustAnchors: Seq[String]) = main.runValidator(trustAnchors)
+      override protected def startTrustAnchorValidation(trustAnchors: Seq[String]) = main.runValidator(trustAnchors, forceNewFetch = true)
 
       override protected def trustAnchors = memoryImage.single.get.trustAnchors
       override protected def validatedObjects = memoryImage.single.get.validatedObjects
@@ -247,7 +262,7 @@ class Main() { main =>
       override protected def addWhitelistEntry(entry: RtrPrefix) = updateAndPersist { implicit transaction => updateMemoryImage(_.addWhitelistEntry(entry)) }
       override protected def removeWhitelistEntry(entry: RtrPrefix) = updateAndPersist { implicit transaction => updateMemoryImage(_.removeWhitelistEntry(entry)) }
 
-      override protected def bgpRisDumps = main.bgpRisDumps.single.get
+      override protected def bgpAnnouncementSet = main.bgpAnnouncementSets.single.get
       override protected def validatedAnnouncements = bgpAnnouncementValidator.validatedAnnouncements
 
       override protected def getRtrPrefixes = memoryImage.single.get.getDistinctRtrPrefixes
@@ -257,8 +272,7 @@ class Main() { main =>
       // Software Update checker
       override def newVersionDetailFetcher = new OnlineNewVersionDetailFetcher(ReleaseInfo.version,
         () => {
-          val get = new HttpGet("https://lirportal.ripe.net/certification/content/static/validator/latest-version.properties")
-          val response = httpClient.execute(get)
+          val response = httpGet("https://lirportal.ripe.net/certification/content/static/validator/latest-version.properties")
           scala.io.Source.fromInputStream(response.getEntity.getContent).mkString
         })
 
@@ -272,8 +286,17 @@ class Main() { main =>
     }
 
     val restApiServlet = new RestApi() {
-      protected def getVrpObjects = memoryImage.single.get.getDistinctRtrPrefixes
+      override protected def getVrpObjects = memoryImage.single.get.getDistinctRtrPrefixes
+
+      override protected def getCachedObjects = store.getAllObjects
     }
+
+    val healthServlet = new HealthServlet() {
+      override protected def getValidatedObjects = memoryImage.single.get.validatedObjects
+
+      override protected def getTrustAnchors = memoryImage.single.get.trustAnchors
+    }
+
 
     val root = new ServletContextHandler(server, "/", ServletContextHandler.SESSIONS)
     root.setResourceBase(getClass.getResource("/public").toString)
@@ -282,16 +305,17 @@ class Main() { main =>
     defaultServletHolder.setInitParameter("dirAllowed", "false")
     root.addServlet(defaultServletHolder, "/*")
     root.addServlet(new ServletHolder(restApiServlet), "/api/*")
-    root.addServlet(new ServletHolder(new HealthCheckServlet(HealthChecks.registry)), "/health")
+    root.addServlet(new ServletHolder(healthServlet), "/health")
     root.addFilter(new FilterHolder(webFilter), "/*", EnumSet.allOf(classOf[DispatcherType]))
 
     val requestLogHandler = {
       val handler = new RequestLogHandler()
       val requestLog = new NCSARequestLog(ApplicationOptions.accessLogFileName)
-      requestLog.setRetainDays(90)
       requestLog.setAppend(true)
-      requestLog.setExtended(false)
+      requestLog.setExtended(true)
       requestLog.setLogLatency(true)
+      requestLog.setPreferProxiedForAddress(true)
+      requestLog.setRetainDays(90)
       handler.setRequestLog(requestLog)
       handler
     }
@@ -301,6 +325,13 @@ class Main() { main =>
     handlers.addHandler(requestLogHandler)
     server.setHandler(handlers)
     server
+  }
+
+  private def wipeRsyncDiskCache() {
+    val diskCache = new File(ApplicationOptions.rsyncDirLocation)
+    if (diskCache.isDirectory) {
+      FileUtils.cleanDirectory(diskCache)
+    }
   }
 
 }

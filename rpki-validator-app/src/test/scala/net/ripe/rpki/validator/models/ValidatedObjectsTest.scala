@@ -40,14 +40,18 @@ object ValidatedObjectsTest {
 
   def makeListOfValidObjects(number: Int) = for (nr <- 1 until number + 1) yield {
     ValidObject(
+      nr.toString,
       URI.create(s"rsync://some.host/repo/valid-$nr.unk"),
+      Some(Array[Byte](4, nr.toByte)),
       Set(new ValidationCheck(ValidationStatus.PASSED, ValidationString.VALIDATOR_READ_FILE)),
       new UnknownCertificateRepositoryObject(new Array[Byte](0)))
   }
 
   def makeListOfInvalidObjects(number: Int) = for (nr <- 1 until number + 1) yield {
     InvalidObject(
+      nr.toString,
       URI.create(s"rsync://some.host/repo/invalid-$nr.unk"),
+      Some(Array[Byte](5, nr.toByte)),
       Set(new ValidationCheck(ValidationStatus.ERROR, ValidationString.VALIDATOR_READ_FILE)))
   }
 }
@@ -153,7 +157,6 @@ class ValidatedObjectsTest extends ValidatorTestCase with MockitoSugar {
 
     validatedObjectsAfterThirdRun.all.get(TAL) should not be (None)
     validatedObjectsAfterThirdRun.all.get(TAL).get.objectCountDropObserved should be (None)
-
   }
 
 }

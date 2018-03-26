@@ -86,8 +86,8 @@ object Layouts {
           <div class="container nzrs-header">
             <div class="row" style="position: relative;">
               <div class="span4 nzrs-header-logo">
-                <a href="https://nzrs.net.nz/" title=".nz Registry Services" target="_blank">
-                  <img src="/images/nzrs-logo.png" alt="NZRS" width="171" height="70"/>
+                <a href="https://internetnz.net.nz/" title="Internet NZ" target="_blank">
+                  <img src="/images/InternetNZ.svg" alt="Internet NZ" width="171" height="70"/>
                 </a>
               </div>
 
@@ -138,7 +138,7 @@ object Layouts {
           </div>
         </footer>
         <div id="feedbackButton">
-          <a href="mailto:rpki@nzrs.net.nz?subject=RPKI%20Validator%20Feedback"><img src="/images/feedback.png" width="41" height="111" alt="Feedback"/></a>
+          <a href="mailto:rpki@internetnz.net.nz?subject=RPKI%20Validator%20Feedback"><img src="/images/feedback.png" width="41" height="111" alt="Feedback"/></a>
         </div>
       </body>
     </html>
